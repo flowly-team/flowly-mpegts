@@ -1,0 +1,27 @@
+[package]
+name = "flowly-mpegts"
+version = "0.2.1"
+edition = "2024"
+description = "Mpeg2Ts format streaming parser"
+keywords = ["mpegts", "parser", "async", "demuxer", "mpeg2ts"]
+categories = ["asynchronous", "multimedia", "parser-implementations"]
+authors = ["Andrey Tkachenko <andrey@aidev.ru>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/flowly-team/flowly-mpegts"
+homepage = "https://github.com/flowly-team/flowly-mpegts"
+
+
+[dependencies]
+async-stream = "0.3.6"
+bytes = "1.10.1"
+flowly = "0.2"
+futures = "0.3"
+mpeg2ts = "0.3.1"
+thiserror = "2.0.12"
+
+[dev-dependencies]
+anyhow = "1.0"
+env_logger = "0.11.8"
+flowly-flv = { path = "../flowly-flv" }
+tokio = { version = "1", features = ["full"] }
