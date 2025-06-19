@@ -1,6 +1,6 @@
 [package]
 name = "flowly-mpegts"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Mpeg2Ts format streaming parser"
 keywords = ["mpegts", "parser", "async", "demuxer", "mpeg2ts"]

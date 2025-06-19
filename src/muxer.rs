@@ -16,7 +16,7 @@ use mpeg2ts::{
     },
 };
 
-use crate::{Error, error::ExtError};
+use crate::Error;
 
 const PMT_PID: u16 = 256;
 const VIDEO_ES_PID: u16 = 257;
@@ -221,7 +221,7 @@ impl Mpeg2TsMuxer {
 impl<F: Frame + Send, E: std::error::Error + Send + Sync + 'static> Service<Result<F, E>>
     for Mpeg2TsMuxer
 {
-    type Out = Result<Bytes, ExtError<E>>;
+    type Out = Result<Bytes, Error<E>>;
 
     fn handle(
         mut self,
@@ -235,12 +235,12 @@ impl<F: Frame + Send, E: std::error::Error + Send + Sync + 'static> Service<Resu
                 match res {
                     Ok(frame) => {
                         if let Err(err) = self.push_frame(frame, &mut buffer) {
-                             yield Err(err.into());
+                             yield Err(err.extend());
                         }
 
                         yield Ok(buffer.split().freeze());
                     },
-                    Err(err) => yield Err(ExtError::Other(err)),
+                    Err(err) => yield Err(Error::Other(err)),
                 }
             }
         }
