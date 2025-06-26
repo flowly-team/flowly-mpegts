@@ -1,7 +1,7 @@
 use std::pin::pin;
 
 use flowly::{Service, ServiceExt, io::file::FileReader};
-use flowly_flv::FlvDemuxer;
+// use flowly_flv::FlvDemuxer;
 use flowly_mpegts::Mpeg2TsMuxer;
 use futures::TryStreamExt;
 use tokio::io::AsyncWriteExt;
@@ -12,7 +12,7 @@ async fn main() {
 
     let flow = flowly::flow() //-
         .flow(FileReader::default())
-        .flow(FlvDemuxer::default())
+        // .flow(FlvDemuxer::default())
         .flow(Mpeg2TsMuxer::default());
 
     let mut stream = pin!(flow.handle(futures::stream::iter([Ok::<_, std::io::Error>(
