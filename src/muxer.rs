@@ -1,7 +1,7 @@
 use std::{io::Write, pin::pin};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use flowly::{Fourcc, Frame, Service};
+use flowly::{EncodedFrame, Fourcc, Frame, Service};
 use futures::StreamExt;
 use mpeg2ts::{
     Error as TsError,
@@ -16,7 +16,7 @@ use mpeg2ts::{
     },
 };
 
-use crate::{Error, error::ExtError};
+use crate::Error;
 
 const PMT_PID: u16 = 256;
 const VIDEO_ES_PID: u16 = 257;
@@ -181,7 +181,11 @@ impl Mpeg2TsMuxer {
 }
 
 impl Mpeg2TsMuxer {
-    fn push_frame<F: Frame>(&mut self, frame: F, dst: &mut BytesMut) -> Result<(), Error> {
+    fn push_frame<F: Frame + EncodedFrame>(
+        &mut self,
+        frame: F,
+        dst: &mut BytesMut,
+    ) -> Result<(), Error> {
         let mut writer = TsPacketWriter::new(dst.writer());
 
         if !self.header_sent {
@@ -207,21 +211,19 @@ impl Mpeg2TsMuxer {
                 self.params_updated = false;
             }
 
-            self.write_packet(&mut writer, ts, param, false)?;
+            self.write_packet(&mut writer, ts, param.as_ref(), false)?;
         }
 
-        for unit in frame.units() {
-            self.write_packet(&mut writer, ts, unit, frame.is_keyframe())?;
+        for chunk in frame.chunks() {
+            self.write_packet(&mut writer, ts, chunk.as_ref(), frame.is_keyframe())?;
         }
 
         Ok(())
     }
 }
 
-impl<F: Frame + Send, E: std::error::Error + Send + Sync + 'static> Service<Result<F, E>>
-    for Mpeg2TsMuxer
-{
-    type Out = Result<Bytes, ExtError<E>>;
+impl<F: EncodedFrame, E: flowly::Error> Service<Result<F, E>> for Mpeg2TsMuxer {
+    type Out = Result<Bytes, Error<E>>;
 
     fn handle(
         mut self,
@@ -235,12 +237,12 @@ impl<F: Frame + Send, E: std::error::Error + Send + Sync + 'static> Service<Resu
                 match res {
                     Ok(frame) => {
                         if let Err(err) = self.push_frame(frame, &mut buffer) {
-                             yield Err(err.into());
+                             yield Err(err.extend());
                         }
 
                         yield Ok(buffer.split().freeze());
                     },
-                    Err(err) => yield Err(ExtError::Other(err)),
+                    Err(err) => yield Err(Error::Other(err)),
                 }
             }
         }

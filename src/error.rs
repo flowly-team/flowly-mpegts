@@ -1,7 +1,7 @@
-use flowly::Fourcc;
+use flowly::{Fourcc, Void};
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub enum Error<E = Void> {
     #[error("Mpeg2Ts Error: {0}")]
     TsError(#[from] mpeg2ts::Error),
 
@@ -28,13 +28,24 @@ pub enum Error {
 
     #[error("Unsupported Codec {0}")]
     MuxUnsupportedCodec(Fourcc),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ExtError<E> {
-    #[error(transparent)]
-    Error(#[from] Error),
 
     #[error(transparent)]
     Other(E),
+}
+
+impl Error {
+    pub fn extend<E>(self) -> Error<E> {
+        match self {
+            Error::TsError(error) => Error::TsError(error),
+            Error::WrongAudioStreamId(id) => Error::WrongAudioStreamId(id),
+            Error::WrongVideoStreamId(id) => Error::WrongVideoStreamId(id),
+            Error::ValueTooLarge(val) => Error::ValueTooLarge(val),
+            Error::UnexpectedMarkerBit(mask) => Error::UnexpectedMarkerBit(mask),
+            Error::WrogSyncByte => Error::WrogSyncByte,
+            Error::UnknownPid(pid) => Error::UnknownPid(pid),
+            Error::PsiTableCountZero => Error::PsiTableCountZero,
+            Error::MuxUnsupportedCodec(fourcc) => Error::MuxUnsupportedCodec(fourcc),
+            Error::Other(_) => unreachable!(),
+        }
+    }
 }
