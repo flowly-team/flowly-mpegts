@@ -1,7 +1,7 @@
 use std::{io::Write, pin::pin};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use flowly::{Fourcc, Frame, Service};
+use flowly::{EncodedFrame, Fourcc, Frame, FrameFlags, MemBlock, Service};
 use futures::StreamExt;
 use mpeg2ts::{
     Error as TsError,
@@ -16,7 +16,21 @@ use mpeg2ts::{
     },
 };
 
-use crate::{Error, error::ExtError};
+use crate::Error;
+
+pub struct Mpeg2TsMuxerConfig {
+    pub send_aud: bool,
+    pub send_params_on_each_keyframe: bool,
+}
+
+impl Default for Mpeg2TsMuxerConfig {
+    fn default() -> Self {
+        Self {
+            send_aud: false,
+            send_params_on_each_keyframe: true,
+        }
+    }
+}
 
 const PMT_PID: u16 = 256;
 const VIDEO_ES_PID: u16 = 257;
@@ -28,22 +42,96 @@ const PES_VIDEO_STREAM_ID: u8 = 224;
 pub struct Mpeg2TsMuxer {
     video_continuity_counter: ContinuityCounter,
     header_sent: bool,
-    params_updated: bool,
+    buf: Vec<u8>,
+    config: Mpeg2TsMuxerConfig,
 }
 
 impl Mpeg2TsMuxer {
+    pub fn new(config: Mpeg2TsMuxerConfig) -> Self {
+        Self {
+            video_continuity_counter: Default::default(),
+            header_sent: false,
+            buf: Vec::new(),
+            config,
+        }
+    }
+
+    pub fn push_frame<F: Frame + EncodedFrame>(
+        &mut self,
+        frame: F,
+        dst: &mut BytesMut,
+    ) -> Result<(), Error> {
+        let mut writer = TsPacketWriter::new(dst.writer());
+
+        if !self.header_sent {
+            self.header_sent = true;
+            self.write_header(
+                &mut writer,
+                match frame.codec() {
+                    Fourcc::VIDEO_AVC => StreamType::H264,
+                    Fourcc::VIDEO_HEVC => StreamType::H265,
+                    codec => return Err(Error::MuxUnsupportedCodec(codec)),
+                },
+            )?;
+        }
+
+        self.buf.clear();
+        let ts = Timestamp::new((frame.pts() as u64 * 9) / 100).map_err(TsError::from)?;
+
+        let send_params = if self.config.send_params_on_each_keyframe {
+            frame.is_keyframe()
+        } else {
+            frame.has_params()
+        };
+
+        if send_params {
+            for param in frame.params() {
+                if !frame.has_flag(FrameFlags::ANNEXB) {
+                    self.buf.extend_from_slice(&[0, 0, 1]);
+                }
+
+                self.buf.extend_from_slice(param.as_ref());
+            }
+        }
+
+        for chunk in frame.chunks() {
+            if !frame.has_flag(FrameFlags::ANNEXB) {
+                self.buf.extend_from_slice(&[0, 0, 1]);
+            }
+
+            self.buf.extend_from_slice(chunk.map_to_cpu());
+        }
+
+        self.write_packet(&mut writer, ts, frame.is_keyframe())?;
+
+        Ok(())
+    }
+
+    #[inline]
+    fn write_header<W: WriteTsPacket>(
+        &mut self,
+        writer: &mut W,
+        stream_type: StreamType,
+    ) -> Result<(), TsError> {
+        self.write_packets(
+            writer,
+            [
+                &Self::default_pat_packet(),
+                &Self::default_pmt_packet(stream_type),
+            ],
+        )?;
+
+        Ok(())
+    }
+
     fn write_packet(
         &mut self,
         writer: &mut TsPacketWriter<impl Write>,
         ts: Timestamp,
-        unit: &[u8],
         is_keyframe: bool,
     ) -> Result<(), Error> {
         let mut header = Self::default_ts_header(VIDEO_ES_PID, self.video_continuity_counter)?;
-        let mut annexb = Vec::with_capacity(unit.len() + 3);
-        annexb.extend_from_slice(&[0, 0, 1]);
-        annexb.extend_from_slice(unit);
-        let mut buf = &annexb[..];
+        let mut buf = &self.buf[..];
 
         let packet = {
             let data = payload::Bytes::new(&buf.chunk()[..buf.remaining().min(150)])?;
@@ -98,25 +186,6 @@ impl Mpeg2TsMuxer {
         }
 
         self.video_continuity_counter = header.continuity_counter;
-        Ok(())
-    }
-}
-
-impl Mpeg2TsMuxer {
-    #[inline]
-    fn write_header<W: WriteTsPacket>(
-        &mut self,
-        writer: &mut W,
-        stream_type: StreamType,
-    ) -> Result<(), TsError> {
-        self.write_packets(
-            writer,
-            [
-                &Self::default_pat_packet(),
-                &Self::default_pmt_packet(stream_type),
-            ],
-        )?;
-
         Ok(())
     }
 
@@ -180,48 +249,8 @@ impl Mpeg2TsMuxer {
     }
 }
 
-impl Mpeg2TsMuxer {
-    fn push_frame<F: Frame>(&mut self, frame: F, dst: &mut BytesMut) -> Result<(), Error> {
-        let mut writer = TsPacketWriter::new(dst.writer());
-
-        if !self.header_sent {
-            self.header_sent = true;
-            self.write_header(
-                &mut writer,
-                match frame.codec() {
-                    Fourcc::VIDEO_AVC => StreamType::H264,
-                    Fourcc::VIDEO_HEVC => StreamType::H265,
-                    codec => return Err(Error::MuxUnsupportedCodec(codec)),
-                },
-            )?;
-        }
-
-        if frame.has_params() {
-            self.params_updated = true;
-        }
-
-        let ts = Timestamp::new((frame.pts() as u64 * 9) / 100).map_err(TsError::from)?;
-
-        for param in frame.params() {
-            if self.params_updated {
-                self.params_updated = false;
-            }
-
-            self.write_packet(&mut writer, ts, param, false)?;
-        }
-
-        for unit in frame.units() {
-            self.write_packet(&mut writer, ts, unit, frame.is_keyframe())?;
-        }
-
-        Ok(())
-    }
-}
-
-impl<F: Frame + Send, E: std::error::Error + Send + Sync + 'static> Service<Result<F, E>>
-    for Mpeg2TsMuxer
-{
-    type Out = Result<Bytes, ExtError<E>>;
+impl<F: EncodedFrame, E: flowly::Error> Service<Result<F, E>> for Mpeg2TsMuxer {
+    type Out = Result<Bytes, Error<E>>;
 
     fn handle(
         mut self,
@@ -235,12 +264,12 @@ impl<F: Frame + Send, E: std::error::Error + Send + Sync + 'static> Service<Resu
                 match res {
                     Ok(frame) => {
                         if let Err(err) = self.push_frame(frame, &mut buffer) {
-                             yield Err(err.into());
+                             yield Err(err.extend());
                         }
 
                         yield Ok(buffer.split().freeze());
                     },
-                    Err(err) => yield Err(ExtError::Other(err)),
+                    Err(err) => yield Err(Error::Other(err)),
                 }
             }
         }

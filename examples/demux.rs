@@ -1,7 +1,7 @@
-use std::{path::PathBuf, pin::pin, str::FromStr};
+use std::{path::PathBuf, pin::pin};
 
 use bytes::Bytes;
-use flowly::{Frame, Service, ServiceExt, flow, io::file::FileReader};
+use flowly::{Service, ServiceExt, flow};
 use futures::TryStreamExt;
 use tokio::io::AsyncReadExt;
 

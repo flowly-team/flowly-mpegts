@@ -1,7 +1,4 @@
-use std::{
-    io::{self, Read, Write},
-    mem::MaybeUninit,
-};
+use std::mem::MaybeUninit;
 
 use bytes::{Buf, BufMut};
 
